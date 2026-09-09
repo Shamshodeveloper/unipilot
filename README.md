@@ -46,7 +46,17 @@ No auth-user trigger is installed: future authentication server logic can create
 
 ### Applying and checking the schema
 
-The migration is versioned SQL, intended to run once on an empty Supabase project. It is not applied to a live project by this milestone. For a manual initial setup, execute the entire migration in the Supabase SQL Editor as the database owner. It runs in a transaction. If adopting the Supabase CLI afterwards, reconcile its migration history with this manually applied version before using `db push`; do not apply the same migration twice.
+The migration is versioned SQL and runs in a transaction. Supabase CLI is pinned as a development dependency, and `supabase/config.toml` is initialized. Apply existing migrations through the CLI rather than recreating tables manually:
+
+```sh
+npx supabase login
+npx supabase link --project-ref YOUR_PROJECT_REF
+npx supabase db push --linked --dry-run --skip-vault
+npx supabase db push --linked --skip-vault
+npx supabase migration list --linked
+```
+
+Complete the normal browser login when prompted. Review the dry run before pushing. The CLI records applied versions and skips them on subsequent pushes. The local project link is stored in ignored `supabase/.temp/`; each fresh checkout must be linked. Login credentials stay in the CLI's user-level credential store, outside this repository. Local config is not pushed to the project's auth or storage settings by these commands.
 
 On a disposable Supabase database with this migration applied, execute `supabase/tests/database_foundation.sql` as the database owner. It creates two test users and verifies owner CRUD, cross-user and anonymous denial, ownership transfers, foreign keys, enum/check constraints, timestamp triggers, and deletion behavior. It rolls its fixtures back. With PostgreSQL connection settings configured securely in your shell, it can also be run with:
 
