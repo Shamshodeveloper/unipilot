@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-ink: #172b28;
+  --color-muted: #52635e;
+  --color-paper: #f7f9f8;
+  --color-brand: #175b46;
+  --font-sans: Arial, Helvetica, sans-serif;
+}
+
+body { background: var(--color-paper); color: var(--color-ink); }
+::selection { background: #d5ed8a; color: #172b28; }
+a, button, input { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 3px solid #256fbd; outline-offset: 4px; }
+
+@layer components {
+  .button-primary {
+    @apply inline-flex min-h-12 items-center justify-center rounded-full bg-brand px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-ink;
+  }
+  .button-secondary {
+    @apply inline-flex min-h-12 items-center justify-center rounded-full border border-ink/20 bg-white px-6 py-3 text-base font-semibold text-ink transition-colors hover:bg-ink/5;
+  }
+}
