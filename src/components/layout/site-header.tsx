@@ -1,6 +1,9 @@
 import Link from "next/link";
+import { getCurrentUser } from "@/server/auth";
 
-export function SiteHeader() {
+export async function SiteHeader() {
+  const user = await getCurrentUser();
+
   return (
     <header className="border-b border-ink/10">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-5 sm:px-8">
@@ -9,8 +12,14 @@ export function SiteHeader() {
           UniPilot
         </Link>
         <nav aria-label="Main navigation" className="flex items-center gap-4 sm:gap-6">
-          <Link href="/login" className="py-2 text-sm font-semibold hover:underline">Sign In</Link>
-          <Link href="/register" className="button-primary min-h-10 px-4 py-2 text-sm">Get Started</Link>
+          {user ? (
+            <Link href="/dashboard" className="button-primary min-h-10 px-4 py-2 text-sm">Dashboard</Link>
+          ) : (
+            <>
+              <Link href="/login" className="py-2 text-sm font-semibold hover:underline">Sign In</Link>
+              <Link href="/register" className="button-primary min-h-10 px-4 py-2 text-sm">Get Started</Link>
+            </>
+          )}
         </nav>
       </div>
     </header>

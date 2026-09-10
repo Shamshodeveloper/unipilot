@@ -8,11 +8,11 @@ This foundation uses Next.js App Router, TypeScript (strict mode), and Tailwind 
 
 Routes:
 - `/`: responsive homepage with Get Started and Sign In links.
-- `/login`: sign-in UI preview.
-- `/register`: registration UI preview.
-- `/dashboard`: public placeholder, not an authenticated dashboard.
+- `/login`: email/password sign-in.
+- `/register`: email/password registration with password confirmation.
+- `/dashboard`: protected study-space placeholder with account email and Logout.
 
-Authentication inputs and submission buttons are disabled intentionally. No credentials are collected or stored. Milestone 1 has no service integrations; Milestone 2 adds SQL schema files only, without connecting the application to a database.
+Milestone 1 introduced the page foundation, Milestone 2 added the database schema, and Milestone 3 connects authentication. Study tools remain outside the current scope.
 
 ## Milestone 2: database foundation
 
@@ -42,7 +42,7 @@ Composite foreign keys enforce matching owners across relationships, even if a r
 
 Deleting an auth user cascades to all their records. Deleting a subject cascades to its materials, topics, exams, and dependent progress/content. Deleting a material preserves its topics and clears only their source-material reference. Deleting a topic cascades to its progress and generated content. Deleting a profile does not delete the auth account or academic records.
 
-No auth-user trigger is installed: future authentication server logic can create a profile explicitly. Academic records reference `auth.users` directly and do not require a profile first. Privileged database owners and service roles can bypass RLS, so their credentials must never be exposed to clients. See [Supabase's RLS documentation](https://supabase.com/docs/guides/database/postgres/row-level-security).
+No auth-user trigger is installed. Milestone 3 initializes the signed-in user's profile when they reach the dashboard, using their own session and the existing RLS policy. Repeated visits do not overwrite profile data. Academic records reference `auth.users` directly and do not require a profile first. Privileged database owners and service roles can bypass RLS, so their credentials must never be exposed to clients. See [Supabase's RLS documentation](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
 ### Applying and checking the schema
 
@@ -68,25 +68,56 @@ The migration and SQL checks were executed successfully using an isolated PGlite
 
 ## Run locally
 
-Use Node.js 22 or newer and npm.
+Use Node.js 22.6 or newer and npm (Node.js 24 is used for development).
 
 ```sh
 npm ci
+# Copy .env.example to .env.local and fill in the values below first.
 npm run dev
 ```
 
-Open http://localhost:3000. No environment variables are required; `.env.example` documents this. Keep real `.env` files out of Git. Never put secret keys in variables prefixed with `NEXT_PUBLIC_`.
+Open http://localhost:3000. Keep real `.env` files out of Git. Never put secret keys in variables prefixed with `NEXT_PUBLIC_`.
+
+## Milestone 3: authentication
+
+Copy `.env.example` to `.env.local` and set:
+
+| Variable | Value |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project's URL, from its Connect dialog. |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Its public `sb_publishable_...` key. Secret/service-role keys are not accepted. |
+| `SITE_URL` | `http://localhost:3000` locally; your trusted HTTPS origin in production. |
+
+Restart the dev server after changing environment variables. Set them before building for deployment; Next.js embeds public variables at build time. The CLI login/link is separate from application configuration and does not populate these variables.
+
+In Supabase **Authentication → URL Configuration**, set the Site URL to match `SITE_URL` and allow `${SITE_URL}/auth/callback` (for local development, `http://localhost:3000/auth/callback`). Keep the standard signup confirmation email template with `{{ .ConfirmationURL }}` so Supabase verifies the email and forwards the PKCE code to the callback. Open confirmation links in the same browser that registered. Email confirmation settings and SMTP are not changed by this implementation. Supabase's default email service may restrict recipient addresses; configure SMTP when broader delivery is needed.
+
+Authentication uses `@supabase/ssr` cookie sessions, server actions with Zod validation, and a Next.js proxy that refreshes sessions and redirects before rendering. Server pages also verify the current user with Supabase Auth. The dashboard initializes a missing profile only after authentication; an email-confirmation-pending signup does not attempt an anonymous profile insert. No service-role client or schema change is used.
+
+If Supabase returns a duplicate-email error, the form displays it. With email confirmation enabled, Supabase can deliberately mask existing accounts; the confirmation message explains that existing users should sign in, without querying private users or bypassing RLS. Logout ends the current browser session. If remote revocation fails after local cookies were cleared, the login page explains that partial result.
+
+### Manual authentication check
+
+1. Visit `/dashboard` while signed out: it redirects to `/login`.
+2. Register with an email you control, a password of at least 8 characters, and matching confirmation. Invalid fields show inline errors.
+3. If email confirmation is enabled, follow the email link in the same browser. Otherwise registration opens the dashboard immediately.
+4. Confirm the dashboard shows your email, then refresh to check session persistence. Visiting `/login` or `/register` while signed in should redirect back to `/dashboard`.
+5. Click **Logout**. Confirm `/dashboard` redirects to `/login`, then sign in again with your email/password.
+6. Try an incorrect password, mismatched confirmation, and an existing email to check error guidance.
+
+Authentication integration tests use real Next.js routes/server actions against a local mock Supabase service. They do not create live accounts or send emails. Actual email delivery and your project's configuration still need the manual check above.
 
 ## Checks and production build
 
 ```sh
 npm run lint
 npm run typecheck
+npm test
 npm run build
 npm start
 ```
 
-`typecheck` generates Next.js route types before running TypeScript, so it also works on a fresh checkout. Database SQL checks are described above; no frontend test runner is installed. The production server requires a successful build.
+`typecheck` generates Next.js route types before running TypeScript, so it also works on a fresh checkout. `npm test` uses Node's test runner for validation and HTTP auth integration tests; stop any running `next dev` process first because the integration test launches its own dev server. Database SQL checks are described above. The production server requires a successful build.
 
 ESLint is pinned to 9.39.5 because the React lint plugin bundled with the current Next.js configuration fails under ESLint 10. npm reports an upstream deprecation notice for ESLint 9; upgrade when the bundled plugin supports ESLint 10.
 
@@ -94,7 +125,13 @@ ESLint is pinned to 9.39.5 because the React lint plugin bundled with the curren
 
 - `src/app/`: routes, metadata, root layout, and global styles.
 - `src/components/layout/site-header.tsx`: shared branding and navigation.
-- `src/components/auth/auth-preview.tsx`: shared, nonfunctional authentication preview.
+- `src/components/auth/`: authentication forms, pending/error states, and logout control.
+- `src/app/(auth)/actions.ts`: validated registration, login, and logout server actions.
+- `src/app/auth/callback/route.ts`: email-confirmation code exchange.
+- `src/lib/supabase/` and `src/proxy.ts`: browser/server clients, configuration, and session refresh.
+- `src/server/auth.ts`: verified user checks and profile initialization under RLS.
+- `src/types/database.ts`: types generated from the existing remote schema.
+- `tests/`: validation and HTTP authentication tests using local fixtures.
 - `src/app/globals.css`: Tailwind theme and shared button styles.
 - `tsconfig.json`: strict TypeScript configuration and `@/*` imports.
 - `eslint.config.mjs`: Next.js and TypeScript lint rules.
@@ -103,4 +140,4 @@ ESLint is pinned to 9.39.5 because the React lint plugin bundled with the curren
 - `supabase/migrations/`: versioned database schema, constraints, indexes, triggers, and RLS policies.
 - `supabase/tests/database_foundation.sql`: transactional database/security checks.
 
-Server modules and service integrations will be introduced only in their requested milestones. Milestone 2 adds no authentication UI, upload functionality, OpenAI integration, or application database connection.
+No Google login, subject CRUD, uploads, or OpenAI integration is implemented. Database migrations and RLS policies remain unchanged by Milestone 3.
