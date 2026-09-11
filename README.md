@@ -141,3 +141,11 @@ ESLint is pinned to 9.39.5 because the React lint plugin bundled with the curren
 - `supabase/tests/database_foundation.sql`: transactional database/security checks.
 
 No Google login, subject CRUD, uploads, or OpenAI integration is implemented. Database migrations and RLS policies remain unchanged by Milestone 3.
+
+## Milestone 4: student dashboard
+
+The protected dashboard now shows a welcome message, a study-plan empty state, the 12 newest subjects (with the total count), the next five exams, the five newest material metadata records, and counts for all four learning statuses. Exams include today and use UTC dates because the current profile schema has no timezone setting. Topics without progress records count as not started; exact database counts avoid Supabase's row limit.
+
+`src/server/dashboard.ts` loads data in parallel using the existing authenticated server client, explicit user filters, and RLS. No privileged credentials or schema changes are needed. Each data section distinguishes an empty result from a database error and offers a refresh link on failure. The route has a loading skeleton, and unexpected failures use the existing application error boundary.
+
+`npm test` also covers dashboard empty/populated states, ownership filters, exam/material query ordering, counts beyond 1,000 topics, and partial failures using local fixtures. These tests do not replace the existing SQL RLS tests or contact the live database. No subject editing, uploads, or study-plan generation is included.

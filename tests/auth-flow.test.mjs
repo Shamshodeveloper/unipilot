@@ -41,7 +41,9 @@ function browser(origin) {
       const page = await this.request(path);
       assert.equal(page.status, 200);
       const form = new FormData();
-      for (const match of page.text.matchAll(/<input\b[^>]*>/g)) {
+      const formHtml = page.text.match(/<form\b[^>]*>[\s\S]*?<\/form>/)?.[0];
+      assert.ok(formHtml, "Expected a rendered form");
+      for (const match of formHtml.matchAll(/<input\b[^>]*>/g)) {
         const name = match[0].match(/name="([^"]+)"/)?.[1];
         const value = match[0].match(/value="([^"]*)"/)?.[1] ?? "";
         if (name?.startsWith("$ACTION_")) form.append(decodeHtml(name), decodeHtml(value));
@@ -61,6 +63,7 @@ test("real Next.js routes and server actions enforce the email/password session 
   let refreshes = 0;
   let logoutFailure = false;
   let profileFailure = false;
+  let dashboardMode = 'empty';
 
   function session() {
     const expires = Math.floor(Date.now() / 1000) + 3600;
@@ -108,6 +111,33 @@ test("real Next.js routes and server actions enforce the email/password session 
       if (logoutFailure) return send(400, { code: "unexpected_failure", message: "Fixture logout error" });
       tokens.delete(request.headers.authorization?.replace("Bearer ", ""));
       response.writeHead(204); return response.end();
+    }
+    if (url.pathname.startsWith("/rest/v1/") && ["GET", "HEAD"].includes(request.method)) {
+      assert.ok(authorized, "Dashboard queries require the user's session");
+      assert.equal(url.searchParams.get("user_id"), `eq.${user.id}`);
+      const table = url.pathname.split("/").at(-1);
+      if (dashboardMode === "error" && ["subjects", "topic_progress"].includes(table)) return send(503, { message: "private database error" });
+      if (request.method === "HEAD") {
+        const count = dashboardMode === "empty" ? 0 : table === "topics" ? 1504 : 1;
+        response.writeHead(200, { "Content-Range": `*/${count}` });
+        return response.end();
+      }
+      if (table === "exams") {
+        assert.match(url.searchParams.get("exam_date"), /^gte\.\d{4}-\d{2}-\d{2}$/);
+        assert.equal(url.searchParams.get("order"), "exam_date.asc,id.asc");
+        assert.equal(url.searchParams.get("limit"), "5");
+      }
+      if (table === "materials") {
+        assert.equal(url.searchParams.get("order"), "created_at.desc,id.asc");
+        assert.equal(url.searchParams.get("limit"), "5");
+        assert.doesNotMatch(url.searchParams.get("select"), /storage_path/);
+      }
+      const rows = dashboardMode === "empty" ? [] : table === "subjects"
+        ? [{ id: "subject-1", name: "Calculus fixture", description: "Derivatives and integrals" }]
+        : table === "exams" ? [{ id: "exam-1", title: "Calculus final fixture", exam_date: "2099-05-10" }]
+        : [{ id: "material-1", file_name: "Lecture fixture.pdf", mime_type: "application/pdf", size_bytes: 2048, created_at: "2026-01-01T00:00:00Z" }];
+      response.setHeader("Content-Range", `0-${Math.max(0, rows.length - 1)}/${rows.length}`);
+      return send(200, rows);
     }
     if (url.pathname === "/rest/v1/profiles" && request.method === "POST") {
       if (!authorized || data.id !== user.id) return send(403, { message: "RLS denied" });
@@ -165,6 +195,27 @@ test("real Next.js routes and server actions enforce the email/password session 
   assert.equal(dashboard.status, 200);
   assert.match(dashboard.text, /student@example.com/);
   assert.equal(profiles.size, 1);
+  const navigation = dashboard.text.match(/<nav\b[^>]*>[\s\S]*?<\/nav>/)?.[0];
+  assert.ok(navigation);
+  assert.match(navigation, /aria-label="Sign out"/);
+  assert.match(navigation, /<svg/);
+  assert.match(dashboard.text, /No subjects yet/);
+  assert.match(dashboard.text, /No upcoming exams/);
+  assert.match(dashboard.text, /No materials yet/);
+  assert.match(dashboard.text, /No topics to track yet/);
+  dashboardMode = "populated";
+  const populated = await client.request("/dashboard");
+  assert.match(populated.text, /Calculus fixture/);
+  assert.match(populated.text, /Calculus final fixture/);
+  assert.match(populated.text, /Lecture fixture.pdf/);
+  assert.match(populated.text, /1501/); // Includes topics with no progress row, beyond the default row cap.
+  assert.match(populated.text, /Needs review/);
+  dashboardMode = "error";
+  const partialFailure = await client.request("/dashboard");
+  assert.match(partialFailure.text, /We couldn’t load/);
+  assert.match(partialFailure.text, /Calculus final fixture/);
+  assert.doesNotMatch(partialFailure.text, /private database error/);
+  dashboardMode = "empty";
   // Next dev overrides cache headers; production is checked separately after build.
   assert.match(dashboard.headers.get("cache-control"), /no-cache|no-store/);
   assert.equal((await client.request("/login")).location, "/dashboard");
