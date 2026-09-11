@@ -67,6 +67,12 @@ test("real Next.js routes and server actions enforce the email/password session 
   let manageSubjects = false;
   let subjectFailure = false;
   let deleteFailure = false;
+  let manageMaterials = false;
+  let storageFailure = false;
+  let metadataDeleteFailure = false;
+  let metadataInsertFailure = false;
+  const materialRows = new Map();
+  const objects = new Set();
   const subjectRows = new Map();
   const foreignId = "20000000-0000-4000-8000-000000000088";
   subjectRows.set(foreignId, { id: foreignId, name: "Private foreign subject", user_id: "10000000-0000-4000-8000-000000000088", instructor: null, description: null });
@@ -85,7 +91,7 @@ test("real Next.js routes and server actions enforce the email/password session 
   const authServer = createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += chunk;
-    const data = body ? JSON.parse(body) : {};
+    const data = body && request.headers["content-type"]?.includes("application/json") ? JSON.parse(body) : {};
     const url = new URL(request.url, "http://localhost");
     const authorized = tokens.has(request.headers.authorization?.replace("Bearer ", ""));
     const send = (status, value) => {
@@ -117,6 +123,40 @@ test("real Next.js routes and server actions enforce the email/password session 
       if (logoutFailure) return send(400, { code: "unexpected_failure", message: "Fixture logout error" });
       tokens.delete(request.headers.authorization?.replace("Bearer ", ""));
       response.writeHead(204); return response.end();
+    }
+    if (url.pathname.startsWith("/storage/v1/object/academic-materials")) {
+      assert.ok(authorized);
+      if (storageFailure) return send(503, { message: "fixture Storage failure" });
+      if (request.method === "POST") {
+        const path = decodeURIComponent(url.pathname.slice("/storage/v1/object/academic-materials/".length));
+        assert.match(path, new RegExp(`^${user.id}/[0-9a-f-]{36}/[0-9a-f-]{36}\\.(pdf|png|jpg|jpeg|webp)$`));
+        assert.equal(subjectRows.get(path.split("/")[1])?.user_id, user.id);
+        objects.add(path);
+        return send(200, { Key: `academic-materials/${path}`, Id: randomUUID() });
+      }
+      if (request.method === "DELETE") {
+        for (const path of data.prefixes) { assert.ok(path.startsWith(`${user.id}/`)); objects.delete(path); }
+        return send(200, data.prefixes.map((name) => ({ name })));
+      }
+    }
+    if (manageMaterials && url.pathname === "/rest/v1/materials") {
+      assert.ok(authorized);
+      if (request.method === "POST") {
+        if (metadataInsertFailure) return send(400, { message: "fixture metadata failure" });
+        assert.equal(data.user_id, user.id);
+        materialRows.set(data.id, { ...data, created_at: "2026-09-11T00:00:00Z" });
+        return send(201, null);
+      }
+      assert.equal(url.searchParams.get("user_id"), `eq.${user.id}`);
+      const id = url.searchParams.get("id")?.slice(3);
+      const subjectId = url.searchParams.get("subject_id")?.slice(3);
+      const rows = [...materialRows.values()].filter((row) => row.user_id === user.id && (!id || id === row.id) && (!subjectId || subjectId === row.subject_id));
+      if (request.method === "GET") return send(200, rows);
+      if (request.method === "DELETE") {
+        if (metadataDeleteFailure) return send(400, { message: "fixture delete failure" });
+        rows.forEach((row) => materialRows.delete(row.id));
+        return send(200, null);
+      }
     }
     if (manageSubjects && url.pathname === "/rest/v1/subjects") {
       assert.ok(authorized);
@@ -154,7 +194,7 @@ test("real Next.js routes and server actions enforce the email/password session 
         assert.equal(url.searchParams.get("order"), "exam_date.asc,id.asc");
         assert.equal(url.searchParams.get("limit"), "5");
       }
-      if (table === "materials") {
+      if (table === "materials" && !url.searchParams.has("subject_id")) {
         assert.equal(url.searchParams.get("order"), "created_at.desc,id.asc");
         assert.equal(url.searchParams.get("limit"), "5");
         assert.doesNotMatch(url.searchParams.get("select"), /storage_path/);
@@ -278,6 +318,47 @@ test("real Next.js routes and server actions enforce the email/password session 
   assert.equal(edited.location, subjectPath);
   assert.match((await client.request(subjectPath)).text, /Professor Noether/);
   assert.match((await client.request("/dashboard")).text, /Advanced algebra/);
+  manageMaterials = true;
+  const upload = (name, type, content, path = subjectPath) => {
+    const body = new FormData(); body.set("file", new File([content], name, { type }));
+    return client.request(`${path}/materials`, { method: "POST", body });
+  };
+  assert.match((await client.request(subjectPath)).text, /No materials yet/);
+  assert.equal((await upload("notes.pdf", "text/plain", "wrong")).status, 400);
+  assert.equal((await upload("notes.png", "application/pdf", "%PDF-1.7")).status, 400);
+  assert.equal((await upload("notes.pdf", "application/pdf", "not a PDF")).status, 400);
+  assert.equal((await upload("large.pdf", "application/pdf", new Uint8Array(20 * 1024 * 1024 + 1))).status, 400);
+  assert.equal((await upload("notes.pdf", "application/pdf", "%PDF-1.7", `/subjects/${foreignId}`)).status, 404);
+  const csrf = await client.request(`${subjectPath}/materials`, { method: "POST", headers: { Origin: "https://other.example" } });
+  assert.equal(csrf.status, 403);
+  metadataInsertFailure = true;
+  assert.equal((await upload("notes.pdf", "application/pdf", "%PDF-1.7")).status, 400);
+  assert.equal(objects.size, 0);
+  metadataInsertFailure = false;
+  assert.equal((await upload("lecture.pdf", "application/pdf", "%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF")).status, 200);
+  const pdfId = [...materialRows.keys()][0];
+  assert.match((await client.request(subjectPath)).text, /lecture.pdf/);
+  assert.match((await client.request("/dashboard")).text, /lecture.pdf/);
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jG1kAAAAASUVORK5CYII=", "base64");
+  assert.equal((await upload("notes.png", "image/png", png)).status, 200);
+  const blockedSubjectDelete = await client.submit(subjectPath, { confirm: "yes" }, "Delete subject form");
+  assert.match(blockedSubjectDelete.text, /materials first/);
+  assert.equal((await client.request(`/subjects/${foreignId}/materials?materialId=${pdfId}`, { method: "DELETE" })).status, 404);
+  storageFailure = true;
+  assert.equal((await client.request(`${subjectPath}/materials?materialId=${pdfId}`, { method: "DELETE" })).status, 400);
+  assert.ok(materialRows.has(pdfId));
+  assert.equal((await upload("retry.pdf", "application/pdf", "%PDF-1.7")).status, 400);
+  assert.equal(materialRows.size, 3, "Uncertain cleanup retains recoverable metadata");
+  storageFailure = false;
+  metadataDeleteFailure = true;
+  assert.equal((await client.request(`${subjectPath}/materials?materialId=${pdfId}`, { method: "DELETE" })).status, 400);
+  assert.ok(materialRows.has(pdfId));
+  assert.equal(objects.size, 1, "Blob removed before metadata retry");
+  metadataDeleteFailure = false;
+  for (const materialId of [...materialRows.keys()]) assert.equal((await client.request(`${subjectPath}/materials?materialId=${materialId}`, { method: "DELETE" })).status, 200);
+  assert.equal(objects.size, 0);
+  assert.match((await client.request(subjectPath)).text, /No materials yet/);
+  manageMaterials = false;
   const unconfirmed = await client.submit(subjectPath, {}, "Delete subject form");
   assert.match(unconfirmed.text, /Confirm deletion/);
   assert.ok(subjectRows.has(createdId));

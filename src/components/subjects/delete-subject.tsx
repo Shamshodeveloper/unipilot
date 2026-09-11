@@ -7,6 +7,7 @@ export function DeleteSubject({ id }: { id: string }) {
   const [state, action, pending] = useActionState<SubjectFormState, FormData>(deleteSubject, {});
   return <section aria-label="Delete subject" className="mt-8 rounded-3xl border border-red-200 bg-white p-6 sm:p-8">
     <h2 className="text-xl font-semibold">Delete subject</h2>
+    <p className="mt-3 text-sm text-muted">Delete all materials above first so their private files are removed safely.</p>
     <p className="mt-3 text-sm leading-6 text-muted">This permanently deletes this subject and its related topics, materials metadata, exams, learning progress, and generated content. This cannot be undone.</p>
     <form action={action} aria-label="Delete subject form" aria-busy={pending} className="mt-5">
       <input type="hidden" name="subjectId" value={id} />

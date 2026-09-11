@@ -49,6 +49,9 @@ export async function deleteSubject(_previous: SubjectFormState, formData: FormD
   if (formData.get("confirm") !== "yes") return { error: "Confirm deletion before continuing." };
   try {
     const supabase = await createClient();
+    const materials = await supabase.from("materials").select("id").eq("subject_id", id).eq("user_id", user.id).limit(1);
+    if (materials.error) return { error: "We couldn’t check this subject’s materials. Please try again." };
+    if (materials.data.length) return { error: "Delete this subject’s materials first, then delete the subject." };
     const { data, error } = await supabase.from("subjects").delete().eq("id", id).eq("user_id", user.id).select("id").maybeSingle();
     if (error) return { error: "We couldn’t delete this subject. Please try again." };
     if (!data) return { error: "Subject not found or unavailable." };
