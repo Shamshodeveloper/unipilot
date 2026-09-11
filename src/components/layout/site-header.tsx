@@ -15,6 +15,7 @@ export async function SiteHeader() {
         <nav aria-label="Main navigation" className="flex shrink-0 items-center gap-2 sm:gap-6">
           {user ? (
             <>
+              <Link href="/subjects" className="hidden py-2 text-sm font-semibold hover:underline sm:inline-flex">Subjects</Link>
               <Link href="/dashboard" className="button-primary min-h-11 px-4 py-2 text-sm sm:min-h-10">Dashboard</Link>
               <LogoutButton mobileIcon />
             </>
@@ -25,6 +26,7 @@ export async function SiteHeader() {
             </>
           )}
         </nav>
+        {user && <nav aria-label="Study navigation" className="basis-full border-t border-ink/10 pt-2 sm:hidden"><Link href="/subjects" className="inline-flex min-h-11 items-center text-sm font-semibold text-brand hover:underline">Subjects</Link></nav>}
       </div>
     </header>
   );

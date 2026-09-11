@@ -37,19 +37,19 @@ function browser(origin) {
       }
       return { status: response.status, location: response.headers.get("location"), headers: response.headers, text: await response.text() };
     },
-    async submit(path, fields) {
+    async submit(path, fields, formLabel) {
       const page = await this.request(path);
       assert.equal(page.status, 200);
       const form = new FormData();
-      const formHtml = page.text.match(/<form\b[^>]*>[\s\S]*?<\/form>/)?.[0];
+      const formHtml = [...page.text.matchAll(/<form\b[^>]*>[\s\S]*?<\/form>/g)].map((match) => match[0]).find((html) => !formLabel || html.includes(`aria-label="${formLabel}"`));
       assert.ok(formHtml, "Expected a rendered form");
       for (const match of formHtml.matchAll(/<input\b[^>]*>/g)) {
         const name = match[0].match(/name="([^"]+)"/)?.[1];
         const value = match[0].match(/value="([^"]*)"/)?.[1] ?? "";
-        if (name?.startsWith("$ACTION_")) form.append(decodeHtml(name), decodeHtml(value));
+        if (name?.startsWith("$ACTION_") || name === "subjectId") form.append(decodeHtml(name), decodeHtml(value));
       }
       assert.ok([...form.keys()].length > 0, "Expected a real React server-action form");
-      for (const [name, value] of Object.entries(fields)) form.append(name, value);
+      for (const [name, value] of Object.entries(fields)) form.set(name, value);
       return this.request(path, { method: "POST", body: form });
     },
   };
@@ -64,6 +64,12 @@ test("real Next.js routes and server actions enforce the email/password session 
   let logoutFailure = false;
   let profileFailure = false;
   let dashboardMode = 'empty';
+  let manageSubjects = false;
+  let subjectFailure = false;
+  let deleteFailure = false;
+  const subjectRows = new Map();
+  const foreignId = "20000000-0000-4000-8000-000000000088";
+  subjectRows.set(foreignId, { id: foreignId, name: "Private foreign subject", user_id: "10000000-0000-4000-8000-000000000088", instructor: null, description: null });
 
   function session() {
     const expires = Math.floor(Date.now() / 1000) + 3600;
@@ -111,6 +117,27 @@ test("real Next.js routes and server actions enforce the email/password session 
       if (logoutFailure) return send(400, { code: "unexpected_failure", message: "Fixture logout error" });
       tokens.delete(request.headers.authorization?.replace("Bearer ", ""));
       response.writeHead(204); return response.end();
+    }
+    if (manageSubjects && url.pathname === "/rest/v1/subjects") {
+      assert.ok(authorized);
+      if (subjectFailure || (deleteFailure && request.method === "DELETE")) return send(503, { message: "private subject database error" });
+      const id = url.searchParams.get("id")?.replace("eq.", "");
+      if (request.method !== "POST") assert.equal(url.searchParams.get("user_id"), `eq.${user.id}`);
+      if (request.method === "POST") {
+        assert.equal(data.user_id, user.id, "Owner must be derived from authenticated session");
+        const row = { ...data, id: randomUUID() };
+        subjectRows.set(row.id, row);
+        return send(201, { id: row.id });
+      }
+      const owned = [...subjectRows.values()].filter((row) => row.user_id === user.id && (!id || row.id === id));
+      if (request.method === "GET") {
+        response.setHeader("Content-Range", `0-${Math.max(0, owned.length - 1)}/${owned.length}`);
+        return send(200, owned);
+      }
+      if (!owned.length) return send(200, null);
+      if (request.method === "PATCH") subjectRows.set(id, { ...owned[0], ...data });
+      if (request.method === "DELETE") subjectRows.delete(id);
+      return send(200, { id });
     }
     if (url.pathname.startsWith("/rest/v1/") && ["GET", "HEAD"].includes(request.method)) {
       assert.ok(authorized, "Dashboard queries require the user's session");
@@ -177,6 +204,9 @@ test("real Next.js routes and server actions enforce the email/password session 
   assert.equal(protectedPage.location, "/login");
   assert.doesNotMatch(protectedPage.text, /student@example.com/);
 
+  for (const path of ["/subjects", "/subjects/new", `/subjects/${foreignId}`, `/subjects/${foreignId}/edit`]) {
+    assert.equal((await client.request(path)).location, "/login");
+  }
   const invalid = await client.submit("/register", { email: "invalid", password: "short", confirmPassword: "different" });
   assert.match(invalid.text, /Enter a valid email address/);
   assert.match(invalid.text, /Passwords do not match/);
@@ -221,6 +251,53 @@ test("real Next.js routes and server actions enforce the email/password session 
   assert.equal((await client.request("/login")).location, "/dashboard");
   assert.equal((await client.request("/register")).location, "/dashboard");
 
+  manageSubjects = true;
+  const emptySubjects = await client.request("/subjects");
+  assert.match(emptySubjects.text, /No subjects yet/);
+  assert.doesNotMatch(emptySubjects.text, /Private foreign subject/);
+  const invalidSubject = await client.submit("/subjects/new", { name: " ", description: "", instructor: "" }, "Subject form");
+  assert.match(invalidSubject.text, /Enter a subject name/);
+  subjectFailure = true;
+  const failedSave = await client.submit("/subjects/new", { name: "Math", description: "", instructor: "" }, "Subject form");
+  assert.match(failedSave.text, /We couldn’t save/);
+  assert.doesNotMatch(failedSave.text, /private subject database error/);
+  subjectFailure = false;
+  const created = await client.submit("/subjects/new", { name: " Algebra course ", description: "Linear equations", instructor: " Dr. Euler ", user_id: "untrusted-owner" }, "Subject form");
+  assert.equal(created.status, 303);
+  assert.match(created.location, /^\/subjects\/[0-9a-f-]{36}$/);
+  const subjectPath = created.location;
+  const createdId = subjectPath.split("/").at(-1);
+  assert.equal(subjectRows.get(createdId).user_id, user.id);
+  assert.match((await client.request(subjectPath)).text, /Dr. Euler/);
+  assert.match((await client.request("/subjects")).text, /Algebra course/);
+  assert.match((await client.request("/dashboard")).text, /Algebra course/);
+  assert.match((await client.request(`/subjects/${foreignId}`)).text, /Subject not found/);
+  assert.match((await client.request(`/subjects/${foreignId}/edit`)).text, /Subject not found/);
+  assert.match((await client.request("/subjects/invalid-id")).text, /Subject not found/);
+  const edited = await client.submit(`${subjectPath}/edit`, { name: "Advanced algebra", description: "", instructor: "Professor Noether" }, "Subject form");
+  assert.equal(edited.location, subjectPath);
+  assert.match((await client.request(subjectPath)).text, /Professor Noether/);
+  assert.match((await client.request("/dashboard")).text, /Advanced algebra/);
+  const unconfirmed = await client.submit(subjectPath, {}, "Delete subject form");
+  assert.match(unconfirmed.text, /Confirm deletion/);
+  assert.ok(subjectRows.has(createdId));
+  const foreignEdit = await client.submit(`${subjectPath}/edit`, { subjectId: foreignId, name: "Intruder edit", description: "", instructor: "" }, "Subject form");
+  assert.match(foreignEdit.text, /Subject not found or unavailable/);
+  const foreignDelete = await client.submit(subjectPath, { subjectId: foreignId, confirm: "yes" }, "Delete subject form");
+  assert.match(foreignDelete.text, /Subject not found or unavailable/);
+  assert.equal(subjectRows.get(foreignId).name, "Private foreign subject");
+  deleteFailure = true;
+  const failedDelete = await client.submit(subjectPath, { confirm: "yes" }, "Delete subject form");
+  assert.match(failedDelete.text, /We couldn’t delete/);
+  assert.ok(subjectRows.has(createdId));
+  deleteFailure = false;
+  const deleted = await client.submit(subjectPath, { confirm: "yes" }, "Delete subject form");
+  assert.equal(deleted.location, "/subjects");
+  assert.equal(subjectRows.has(createdId), false);
+  assert.ok(subjectRows.has(foreignId));
+  assert.match((await client.request("/subjects")).text, /No subjects yet/);
+  assert.doesNotMatch((await client.request("/dashboard")).text, /Advanced algebra/);
+  manageSubjects = false;
   profileFailure = true;
   assert.match((await client.request("/dashboard")).text, /couldn’t initialize your profile/);
   profileFailure = false;

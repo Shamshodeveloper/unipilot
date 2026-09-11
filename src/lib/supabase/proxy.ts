@@ -7,8 +7,10 @@ export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
   response.headers.set("Cache-Control", "private, no-store");
   const config = getSupabaseConfig();
+  const pathname = request.nextUrl.pathname;
+  const protectedRoute = ["/dashboard", "/subjects"].some((route) => pathname === route || pathname.startsWith(`${route}/`));
   if (!config) {
-    if (request.nextUrl.pathname.startsWith("/dashboard")) {
+    if (protectedRoute) {
       return NextResponse.redirect(new URL("/login", request.url));
     }
     return response;
@@ -31,8 +33,7 @@ export async function updateSession(request: NextRequest) {
 
   // A server-confirmed user also detects revoked sessions before any HTML is streamed.
   const { data: { user } } = await supabase.auth.getUser();
-  const pathname = request.nextUrl.pathname;
-  const destination = !user && (pathname === "/dashboard" || pathname.startsWith("/dashboard/"))
+  const destination = !user && protectedRoute
     ? "/login"
     : user && (pathname === "/login" || pathname === "/register") ? "/dashboard" : null;
   if (destination) {

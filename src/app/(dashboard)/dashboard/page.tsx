@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { DashboardSection, DataError, EmptyState } from "@/components/dashboard/dashboard-section";
 import { ensureProfile, requireUser } from "@/server/auth";
@@ -33,9 +34,10 @@ export default async function DashboardPage() {
           <EmptyState title="No study plan for today yet." detail="Your subjects, exams, and learning progress are collected below. Daily study planning is coming later." />
         </DashboardSection>
         <DashboardSection title="Subjects Overview" description="Your university subjects, most recently added first.">
+          <div className="mb-5 flex flex-wrap gap-4"><Link href="/subjects" className="font-semibold text-brand hover:underline">All Subjects</Link><Link href="/subjects/new" className="font-semibold text-brand hover:underline">Add Subject</Link></div>
           {subjects.error ? <DataError section="your subjects" /> : !subjects.data?.length ? <EmptyState title="No subjects yet." detail="Add your first university subject to get started." /> : <>
             <p className="mb-4 text-sm text-muted">Showing {subjects.data.length} of {subjects.count ?? subjects.data.length} subjects.</p>
-            <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{subjects.data.map((subject) => <li key={subject.id} className="min-w-0 rounded-2xl border border-ink/10 bg-paper p-5"><h3 className="break-words text-lg font-semibold">{subject.name}</h3><p className="mt-2 line-clamp-3 break-words text-sm leading-6 text-muted">{subject.description || "No description added."}</p></li>)}</ul>
+            <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{subjects.data.map((subject) => <li key={subject.id} className="min-w-0 rounded-2xl border border-ink/10 bg-paper p-5"><h3 className="break-words text-lg font-semibold"><Link href={`/subjects/${subject.id}`} className="hover:underline">{subject.name}</Link></h3><p className="mt-2 line-clamp-3 break-words text-sm leading-6 text-muted">{subject.description || "No description added."}</p></li>)}</ul>
           </>}
         </DashboardSection>
         <div className="grid gap-6 lg:grid-cols-2">

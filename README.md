@@ -149,3 +149,13 @@ The protected dashboard now shows a welcome message, a study-plan empty state, t
 `src/server/dashboard.ts` loads data in parallel using the existing authenticated server client, explicit user filters, and RLS. No privileged credentials or schema changes are needed. Each data section distinguishes an empty result from a database error and offers a refresh link on failure. The route has a loading skeleton, and unexpected failures use the existing application error boundary.
 
 `npm test` also covers dashboard empty/populated states, ownership filters, exam/material query ordering, counts beyond 1,000 topics, and partial failures using local fixtures. These tests do not replace the existing SQL RLS tests or contact the live database. No subject editing, uploads, or study-plan generation is included.
+
+## Milestone 5: subject management
+
+`/subjects` lists your subjects, with Add Subject at `/subjects/new`, details at `/subjects/[id]`, and editing at `/subjects/[id]/edit`. Forms accept a required name (up to 200 characters), optional description (5,000), and optional instructor (200). Empty optional fields become NULL. Topics, materials, exams, and progress on the detail page are future-feature placeholders.
+
+The new `20260911000000_subject_instructor.sql` migration adds nullable `instructor text`; it leaves the initial migration and RLS unchanged. It has been applied to the linked project and verified through the remote migration ledger and generated schema types. Apply it on other environments before running this version.
+
+Reads and server actions verify the authenticated user and filter ownership. Creation takes the owner from the session, never from form input. Deletion requires explicit checkbox confirmation and warns that existing database cascades also remove the subject's related records. Successful changes refresh the subjects list, detail/edit pages, and dashboard. Dashboard cards link to subject details. Mobile keeps Dashboard and the logout icon together, with Subjects on a separate navigation row.
+
+Loading, missing/foreign subject, validation, and database failure states are included. Run `npm run lint`, `npm run typecheck`, and `npm test` (stop the dev server first). Application tests use a local Supabase fixture for subject CRUD, protected routes, errors, and dashboard integration. Run both `supabase/tests/database_foundation.sql` and `supabase/tests/subject_management.sql` against a disposable migrated database to check actual PostgreSQL ownership policies and instructor updates; the tests roll back their fixtures.
